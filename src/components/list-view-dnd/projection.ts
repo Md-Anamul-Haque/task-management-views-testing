@@ -8,6 +8,7 @@ export interface Projection {
   parentId: string | null;
   /** The sibling (at `depth`, under `parentId`) that the dragged row should land right after. `null` = first child / first root item. */
   previousSiblingId: string | null;
+  isNestingPrevented?: boolean;
 }
 
 /**
@@ -54,7 +55,10 @@ export function getProjection(
   const activeOrigIndex = flatRows.findIndex((r) => r.task.id === activeId);
   const overOrigIndex = flatRows.findIndex((r) => r.task.id === overId);
 
-  const dragDepthDelta = Math.round(dragOffsetX / INDENTATION_WIDTH);
+  // Use a higher resistance (e.g., 100px) so the user has to drag significantly
+  // to the right or left to trigger a nesting/unnesting action.
+  const DRAG_DEPTH_RESISTANCE = 150;
+  const dragDepthDelta = Math.round(dragOffsetX / DRAG_DEPTH_RESISTANCE);
 
   let overIndex = withoutActive.findIndex((r) => r.task.id === overId);
   const isHoveringSelf = overIndex === -1;
@@ -97,12 +101,15 @@ export function getProjection(
   }
 
   let depth = activeRow.depth + dragDepthDelta;
+  const intendedDepth = depth;
 
   const maxPossibleDepth = previousRow ? previousRow.depth + 1 : 0;
   const minPossibleDepth = nextRow ? nextRow.depth : 0;
 
-  depth = Math.min(depth, maxPossibleDepth, effectiveMaxDepth);
   depth = Math.max(depth, minPossibleDepth, effectiveMinDepth);
+  depth = Math.min(depth, maxPossibleDepth, effectiveMaxDepth);
+
+  const isNestingPrevented = intendedDepth > effectiveMaxDepth && effectiveMaxDepth < maxPossibleDepth;
 
   if (!previousRow || depth === 0) {
     // Inserting at root level. Walk backwards from the insertion point to
@@ -119,15 +126,34 @@ export function getProjection(
       depth: 0,
       parentId: null,
       previousSiblingId: rootSiblingId,
+      isNestingPrevented,
     };
   }
 
   if (depth === previousRow.depth) {
     // Landing as a sibling right after previousRow, under the same parent.
-    return { depth, parentId: previousRow.parentId, previousSiblingId: previousRow.task.id };
+    return { depth, parentId: previousRow.parentId, previousSiblingId: previousRow.task.id, isNestingPrevented };
   }
 
-  // depth === previousRow.depth + 1 → nesting inside previousRow, as its first child.
-  return { depth, parentId: previousRow.task.id, previousSiblingId: null };
+  if (depth === previousRow.depth + 1) {
+    // Nesting inside previousRow, as its first child.
+    return { depth, parentId: previousRow.task.id, previousSiblingId: null, isNestingPrevented };
+  }
+
+  // depth < previousRow.depth (forced outdent because of effectiveMaxDepth)
+  // Walk backwards to find the nearest row at the same depth or shallower.
+  const scanEnd = isDraggingDown ? overIndex : overIndex - 1;
+  for (let i = scanEnd; i >= 0; i--) {
+    const row = withoutActive[i];
+    if (row.depth === depth) {
+      return { depth, parentId: row.parentId, previousSiblingId: row.task.id, isNestingPrevented };
+    }
+    if (row.depth === depth - 1) {
+      return { depth, parentId: row.task.id, previousSiblingId: null, isNestingPrevented };
+    }
+  }
+
+  // Fallback (should not reach here if depth > 0)
+  return { depth, parentId: null, previousSiblingId: null, isNestingPrevented };
 }
 

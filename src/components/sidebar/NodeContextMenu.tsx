@@ -39,15 +39,7 @@ export function NodeContextMenu({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 opacity-0 hover:bg-slate-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger render={<div onClick={(e) => e.stopPropagation()} className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-slate-400 hover:bg-slate-200 group-hover:opacity-100 data-[state=open]:opacity-100"><MoreHorizontal className="h-4 w-4" /></div>} />
       <DropdownMenuContent align="start" className="w-48" onClick={(e) => e.stopPropagation()}>
         {canContainChildren && (
           <DropdownMenuSub>
@@ -91,7 +83,7 @@ export function NodeContextMenu({
           Duplicate
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onDelete} className="text-red-600 focus:text-red-600">
+        <DropdownMenuItem onClick={onDelete} className="text-red-600">
           <Trash2 className="mr-2 h-4 w-4" />
           Delete
         </DropdownMenuItem>

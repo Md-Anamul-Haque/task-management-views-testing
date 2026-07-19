@@ -14,6 +14,7 @@ export interface FlatRow {
 export function flattenVisible(
   tasks: TreeNodeData[],
   expanded: Set<string>,
+  activeId: string | null = null,
   depth = 0,
   parentId: string | null = null,
 ): FlatRow[] {
@@ -28,8 +29,8 @@ export function flattenVisible(
       shouldExpand = task.hasSubtask && expanded.has(task.id) && Array.isArray(task.children);
     }
 
-    if (shouldExpand) {
-      rows.push(...flattenVisible(task.children!, expanded, depth + 1, task.id));
+    if (shouldExpand && task.id !== activeId) {
+      rows.push(...flattenVisible(task.children!, expanded, activeId, depth + 1, task.id));
     }
   }
   return rows;

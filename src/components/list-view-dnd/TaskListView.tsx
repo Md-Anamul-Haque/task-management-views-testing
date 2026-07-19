@@ -122,7 +122,7 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
     return groupOrder.map((status) => groups[status]);
   }, [data, groupBy, groupOrder]);
 
-  const flatRows = useMemo(() => flattenVisible(groupedData, expanded), [groupedData, expanded]);
+  const flatRows = useMemo(() => flattenVisible(groupedData, expanded, activeId), [groupedData, expanded, activeId]);
 
   // Keep a ref mirror of flatRows so the rAF callback always reads the
   // latest value without needing it in a dependency array.
@@ -161,6 +161,23 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
     [data],
   );
 
+  const handleTaskChange = useCallback((id: string, updates: Partial<TaskNodeData>) => {
+    setData((prev) => {
+      function walk(nodes: TreeNodeData[]): TreeNodeData[] {
+        return nodes.map((node) => {
+          if (node.id === id) {
+            return { ...node, ...updates } as TaskNodeData;
+          }
+          if (node.children) {
+            return { ...node, children: walk(node.children) };
+          }
+          return node;
+        });
+      }
+      return walk(prev) as TaskNodeData[];
+    });
+  }, []);
+
   // A task that already has subtasks can't be dragged any deeper than it
   // already is — this is what stops it from ever landing inside another task.
   const activeRow = useMemo(() => flatRows.find((r) => r.task.id === activeId) ?? null, [flatRows, activeId]);
@@ -168,7 +185,12 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
   const effectiveMaxDepth = useMemo(() => {
     if (!activeRow) return MAX_DEPTH;
     if (activeRow.task.type === "group") return 0; // Groups cannot be nested
-    const activeHasSubtasks = Array.isArray(activeRow.task.children) && activeRow.task.children.length > 0;
+    
+    // Check if it has subtasks (either loaded or indicated by the hasSubtask flag)
+    const activeHasSubtasks = 
+      ("hasSubtask" in activeRow.task && activeRow.task.hasSubtask) || 
+      (Array.isArray(activeRow.task.children) && activeRow.task.children.length > 0);
+      
     return activeHasSubtasks ? activeRow.depth : MAX_DEPTH;
   }, [activeRow]);
 
@@ -373,8 +395,15 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className={`rounded-xl border border-slate-200 bg-white p-1 ${className}`}>
-        <div ref={scrollRef} style={{ height, overflow: "auto", position: "relative" }}>
+      <div className={`rounded-xl border border-slate-200 bg-white ${className}`}>
+        <div className="grid grid-cols-[minmax(300px,1fr)_140px_140px_100px] h-9 items-center border-b border-slate-200 bg-slate-50/50 px-1 text-[10px] font-bold text-slate-500 uppercase tracking-widest rounded-t-xl">
+          <div className="pl-[38px] pr-4">Task Name</div>
+          <div className="px-2">Assignee</div>
+          <div className="px-2">Status</div>
+          <div className="px-2">Priority</div>
+        </div>
+
+        <div ref={scrollRef} style={{ height, overflow: "auto", position: "relative" }} className="p-1">
           <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const { task, depth } = flatRows[virtualRow.index];
@@ -405,6 +434,7 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
                       isLoadingChildren={loadingIds.has(task.id)}
                       isReceivingDrop={projectionState?.parentId === task.id}
                       onToggle={handleToggle}
+                      onTaskChange={handleTaskChange}
                     />
                   )}
                 </div>
@@ -430,7 +460,12 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
       {typeof document !== "undefined" &&
         createPortal(
           <DragOverlay dropAnimation={null}>
-            {activeTask ? <DragOverlayCard task={activeTask} /> : null}
+            {activeTask ? (
+              <DragOverlayCard 
+                task={activeTask} 
+                isNestingPrevented={projectionState?.isNestingPrevented}
+              />
+            ) : null}
           </DragOverlay>,
           document.body,
         )}
