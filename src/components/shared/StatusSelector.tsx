@@ -54,7 +54,12 @@ export function StatusSelector({ status, onChange, readOnly }: StatusSelectorPro
             key={statusKey}
             onClick={(e) => {
               e.stopPropagation();
-              onChange?.(statusKey);
+              // Delay the status change slightly so the DropdownMenu closing animation
+              // can finish before the row is unmounted and moved to a new group.
+              // This fixes the "flickering" or "buffering" feeling.
+              setTimeout(() => {
+                onChange?.(statusKey);
+              }, 150);
             }}
             className="flex items-center gap-2 cursor-pointer"
           >

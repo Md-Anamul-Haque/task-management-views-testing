@@ -25,6 +25,7 @@ import { TaskRow } from "./TaskRow";
 import { GroupRow } from "./GroupRow";
 import { DropIndicator } from "./DropIndicator";
 import { DragOverlayCard } from "./DragOverlayCard";
+import { StatusChangeModal } from "./StatusChangeModal";
 import type { TaskNodeData, GroupNodeData, TreeNodeData } from "./types";
 import type { Projection } from "./projection";
 
@@ -62,6 +63,13 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
   const [groupOrder, setGroupOrder] = useState<string[]>(["todo", "in_progress", "done"]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  const [statusModalConfig, setStatusModalConfig] = useState<{
+    isOpen: boolean;
+    taskId: string;
+    taskTitle: string;
+    newStatus: string;
+  }>({ isOpen: false, taskId: "", taskTitle: "", newStatus: "" });
 
   // ── High-frequency drag values live in refs, NOT state ──────────────
   // `overId` and `dragOffsetX` change on every mousemove pixel. Storing
@@ -139,7 +147,7 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
 
   const handleToggle = useCallback(
     async (id: string) => {
-      const task = findNode(data, id);
+      const task = flatRowsRef.current.find((r) => r.task.id === id)?.task as TaskNodeData | undefined;
       if (!task || task.children !== null) {
         setExpanded((prev) => {
           const next = new Set(prev);
@@ -158,25 +166,44 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
         return next;
       });
     },
-    [data],
+    [],
   );
 
-  const handleTaskChange = useCallback((id: string, updates: Partial<TaskNodeData>) => {
+  const executeTaskChange = useCallback((id: string, updates: Partial<TaskNodeData>, updateSubtasks = false) => {
     setData((prev) => {
-      function walk(nodes: TreeNodeData[]): TreeNodeData[] {
+      function walk(nodes: TreeNodeData[], applyToAll = false): TreeNodeData[] {
         return nodes.map((node) => {
-          if (node.id === id) {
-            return { ...node, ...updates } as TaskNodeData;
+          const isTarget = node.id === id;
+          const shouldApply = isTarget || applyToAll;
+          const nextApplyAll = updateSubtasks ? shouldApply : applyToAll;
+          
+          let updatedNode = shouldApply ? { ...node, ...updates } as TaskNodeData : { ...node } as TaskNodeData;
+          
+          if (updatedNode.children) {
+            updatedNode.children = walk(updatedNode.children, nextApplyAll);
           }
-          if (node.children) {
-            return { ...node, children: walk(node.children) };
-          }
-          return node;
+          return updatedNode;
         });
       }
       return walk(prev) as TaskNodeData[];
     });
   }, []);
+
+  const handleTaskChange = useCallback((id: string, updates: Partial<TaskNodeData>) => {
+    if (updates.status) {
+      const task = flatRowsRef.current.find((r) => r.task.id === id)?.task as TaskNodeData | undefined;
+      if (task && (task.hasSubtask || (task.children && task.children.length > 0))) {
+        setStatusModalConfig({
+          isOpen: true,
+          taskId: id,
+          taskTitle: task.title,
+          newStatus: updates.status,
+        });
+        return;
+      }
+    }
+    executeTaskChange(id, updates);
+  }, [executeTaskChange]);
 
   // A task that already has subtasks can't be dragged any deeper than it
   // already is — this is what stops it from ever landing inside another task.
@@ -385,7 +412,8 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
   }
 
   return (
-    <DndContext
+    <>
+      <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
       measuring={MEASURING_CONFIG}
@@ -469,6 +497,18 @@ export function TaskListView({ height = 560, className = "", groupBy = "none" }:
           </DragOverlay>,
           document.body,
         )}
-    </DndContext>
+      </DndContext>
+
+      <StatusChangeModal
+        isOpen={statusModalConfig.isOpen}
+        taskTitle={statusModalConfig.taskTitle}
+        newStatus={statusModalConfig.newStatus}
+        onClose={() => setStatusModalConfig((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={(updateSubtasks) => {
+          executeTaskChange(statusModalConfig.taskId, { status: statusModalConfig.newStatus as any }, updateSubtasks);
+          setStatusModalConfig((prev) => ({ ...prev, isOpen: false }));
+        }}
+      />
+    </>
   );
 }
