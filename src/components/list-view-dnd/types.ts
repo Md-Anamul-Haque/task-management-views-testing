@@ -3,6 +3,7 @@ export type TaskPriority = "low" | "medium" | "high";
 
 export interface TaskNodeData {
   id: string;
+  type?: "task"; // Optional for backwards compatibility, assumed "task" if missing
   title: string;
   status: TaskStatus;
   priority?: TaskPriority;
@@ -13,5 +14,15 @@ export interface TaskNodeData {
    * `[]`    → fetched, confirmed no subtasks
    * `[...]` → fetched, has subtasks
    */
-  children: TaskNodeData[] | null;
+  children: TreeNodeData[] | null;
 }
+
+export interface GroupNodeData {
+  id: string;
+  type: "group";
+  title: string;
+  status: TaskStatus; // The status this group represents
+  children: TreeNodeData[];
+}
+
+export type TreeNodeData = TaskNodeData | GroupNodeData;

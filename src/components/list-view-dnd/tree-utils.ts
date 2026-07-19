@@ -1,6 +1,6 @@
-import type { TaskNodeData } from "./types";
+import type { TreeNodeData } from "./types";
 
-export function findNode(nodes: TaskNodeData[], id: string): TaskNodeData | null {
+export function findNode(nodes: TreeNodeData[], id: string): TreeNodeData | null {
   for (const node of nodes) {
     if (node.id === id) return node;
     if (node.children) {
@@ -12,19 +12,19 @@ export function findNode(nodes: TaskNodeData[], id: string): TaskNodeData | null
 }
 
 export function removeNode(
-  nodes: TaskNodeData[],
+  nodes: TreeNodeData[],
   id: string,
-): { tree: TaskNodeData[]; removed: TaskNodeData | null } {
-  let removed: TaskNodeData | null = null;
+): { tree: TreeNodeData[]; removed: TreeNodeData | null } {
+  let removed: TreeNodeData | null = null;
 
-  function walk(list: TaskNodeData[]): TaskNodeData[] {
-    const next: TaskNodeData[] = [];
+  function walk(list: TreeNodeData[]): TreeNodeData[] {
+    const next: TreeNodeData[] = [];
     for (const node of list) {
       if (node.id === id) {
         removed = node;
         continue;
       }
-      next.push(node.children ? { ...node, children: walk(node.children) } : node);
+      next.push(node.children ? { ...node, children: walk(node.children) } as TreeNodeData : node);
     }
     return next;
   }
@@ -33,11 +33,11 @@ export function removeNode(
 }
 
 export function insertNode(
-  nodes: TaskNodeData[],
+  nodes: TreeNodeData[],
   parentId: string | null,
   index: number,
-  node: TaskNodeData,
-): TaskNodeData[] {
+  node: TreeNodeData,
+): TreeNodeData[] {
   if (parentId === null) {
     const next = [...nodes];
     next.splice(index, 0, node);
@@ -48,23 +48,26 @@ export function insertNode(
     if (n.id === parentId) {
       const children = n.children ? [...n.children] : [];
       children.splice(index, 0, node);
+      if (n.type === "group") {
+        return { ...n, children };
+      }
       return { ...n, children, hasSubtask: true };
     }
     if (n.children) {
-      return { ...n, children: insertNode(n.children, parentId, index, node) };
+      return { ...n, children: insertNode(n.children, parentId, index, node) } as TreeNodeData;
     }
     return n;
   });
 }
 
 export function updateChildren(
-  nodes: TaskNodeData[],
+  nodes: TreeNodeData[],
   id: string,
-  children: TaskNodeData[],
-): TaskNodeData[] {
+  children: TreeNodeData[],
+): TreeNodeData[] {
   return nodes.map((n) => {
-    if (n.id === id) return { ...n, children };
-    if (n.children) return { ...n, children: updateChildren(n.children, id, children) };
+    if (n.id === id) return { ...n, children } as TreeNodeData;
+    if (n.children) return { ...n, children: updateChildren(n.children, id, children) } as TreeNodeData;
     return n;
   });
 }

@@ -7,6 +7,7 @@ import { Button } from "./components/ui/button";
 
 export function App() {
   const [view, setView] = useState<"list" | "board">("list");
+  const [groupBy, setGroupBy] = useState<"none" | "status">("none");
 
   const tasks: Task[] = [
     { id: "1", title: "Design onboarding flow", status: "todo", priority: "high", assignee: "Rafi", hasSubtask: true },
@@ -23,10 +24,19 @@ export function App() {
         >
           Switch to {view === "list" ? "Board" : "List"} View
         </Button>
+        {view === "list" && (
+          <Button
+            variant="outline"
+            className="mt-2 w-full"
+            onClick={() => setGroupBy(groupBy === "none" ? "status" : "none")}
+          >
+            {groupBy === "none" ? "Group by Status" : "Ungroup"}
+          </Button>
+        )}
       </aside>
       <main className="flex-1 overflow-hidden">
         {view === "list" ? (
-          <TaskListView height={700} />
+          <TaskListView height={700} groupBy={groupBy} />
         ) : (
           <BoardView initialTasks={tasks} />
         )}

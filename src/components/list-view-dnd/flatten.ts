@@ -1,7 +1,7 @@
-import type { TaskNodeData } from "./types";
+import type { TreeNodeData } from "./types";
 
 export interface FlatRow {
-  task: TaskNodeData;
+  task: TreeNodeData;
   depth: number;
   parentId: string | null;
 }
@@ -12,7 +12,7 @@ export interface FlatRow {
  * expanded — collapsed branches simply don't produce rows.
  */
 export function flattenVisible(
-  tasks: TaskNodeData[],
+  tasks: TreeNodeData[],
   expanded: Set<string>,
   depth = 0,
   parentId: string | null = null,
@@ -20,8 +20,16 @@ export function flattenVisible(
   const rows: FlatRow[] = [];
   for (const task of tasks) {
     rows.push({ task, depth, parentId });
-    if (task.hasSubtask && expanded.has(task.id) && task.children) {
-      rows.push(...flattenVisible(task.children, expanded, depth + 1, task.id));
+    
+    let shouldExpand = false;
+    if (task.type === "group") {
+      shouldExpand = expanded.has(task.id) && Array.isArray(task.children);
+    } else {
+      shouldExpand = task.hasSubtask && expanded.has(task.id) && Array.isArray(task.children);
+    }
+
+    if (shouldExpand) {
+      rows.push(...flattenVisible(task.children!, expanded, depth + 1, task.id));
     }
   }
   return rows;

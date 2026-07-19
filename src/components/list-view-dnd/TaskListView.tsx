@@ -22,9 +22,10 @@ import { removeNode, insertNode, updateChildren, findNode } from "./tree-utils";
 import { flattenVisible } from "./flatten";
 import { getProjection, INDENTATION_WIDTH } from "./projection";
 import { TaskRow } from "./TaskRow";
+import { GroupRow } from "./GroupRow";
 import { DropIndicator } from "./DropIndicator";
 import { DragOverlayCard } from "./DragOverlayCard";
-import type { TaskNodeData } from "./types";
+import type { TaskNodeData, GroupNodeData, TreeNodeData } from "./types";
 import type { Projection } from "./projection";
 
 /**
@@ -50,13 +51,15 @@ const MEASURING_CONFIG = {
 interface TaskListViewProps {
   height?: number;
   className?: string;
+  groupBy?: "status" | "none";
 }
 
-export function TaskListView({ height = 560, className = "" }: TaskListViewProps) {
+export function TaskListView({ height = 560, className = "", groupBy = "none" }: TaskListViewProps) {
   const [data, setData] = useState<TaskNodeData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
+  const [groupOrder, setGroupOrder] = useState<string[]>(["todo", "in_progress", "done"]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -90,7 +93,36 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
     };
   }, []);
 
-  const flatRows = useMemo(() => flattenVisible(data, expanded), [data, expanded]);
+  useEffect(() => {
+    if (groupBy === "status") {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.add("group-todo");
+        next.add("group-in_progress");
+        next.add("group-done");
+        return next;
+      });
+    }
+  }, [groupBy]);
+
+  const groupedData = useMemo(() => {
+    if (groupBy !== "status") return data;
+
+    const groups: Record<string, GroupNodeData> = {
+      todo: { id: "group-todo", type: "group", title: "To Do", status: "todo", children: [] },
+      in_progress: { id: "group-in_progress", type: "group", title: "In Progress", status: "in_progress", children: [] },
+      done: { id: "group-done", type: "group", title: "Done", status: "done", children: [] },
+    };
+
+    for (const task of data) {
+      if ((task as TreeNodeData).type === "group") continue; // safety check
+      groups[task.status].children.push(task);
+    }
+
+    return groupOrder.map((status) => groups[status]);
+  }, [data, groupBy, groupOrder]);
+
+  const flatRows = useMemo(() => flattenVisible(groupedData, expanded), [groupedData, expanded]);
 
   // Keep a ref mirror of flatRows so the rAF callback always reads the
   // latest value without needing it in a dependency array.
@@ -119,7 +151,7 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
       setLoadingIds((prev) => new Set(prev).add(id));
       setExpanded((prev) => new Set(prev).add(id));
       const subtasks = await fetchSubtasks(id);
-      setData((prev) => updateChildren(prev, id, subtasks));
+      setData((prev) => updateChildren(prev, id, subtasks) as TaskNodeData[]);
       setLoadingIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -132,15 +164,25 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
   // A task that already has subtasks can't be dragged any deeper than it
   // already is — this is what stops it from ever landing inside another task.
   const activeRow = useMemo(() => flatRows.find((r) => r.task.id === activeId) ?? null, [flatRows, activeId]);
+
   const effectiveMaxDepth = useMemo(() => {
     if (!activeRow) return MAX_DEPTH;
+    if (activeRow.task.type === "group") return 0; // Groups cannot be nested
     const activeHasSubtasks = Array.isArray(activeRow.task.children) && activeRow.task.children.length > 0;
     return activeHasSubtasks ? activeRow.depth : MAX_DEPTH;
   }, [activeRow]);
 
+  const effectiveMinDepth = useMemo(() => {
+    if (!activeRow) return 0;
+    if (activeRow.task.type === "group") return 0;
+    return groupBy === "status" ? 1 : 0; // Tasks must be inside a group in grouped view
+  }, [activeRow, groupBy]);
+
   // Keep a ref mirror so the rAF callback can read the latest value.
   const effectiveMaxDepthRef = useRef(effectiveMaxDepth);
   effectiveMaxDepthRef.current = effectiveMaxDepth;
+  const effectiveMinDepthRef = useRef(effectiveMinDepth);
+  effectiveMinDepthRef.current = effectiveMinDepth;
 
   // ── Batched projection update via requestAnimationFrame ─────────────
   // Instead of setState on every mousemove, we schedule a single rAF.
@@ -162,6 +204,7 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
           oid,
           offset,
           effectiveMaxDepthRef.current,
+          effectiveMinDepthRef.current,
         );
         setProjectionState(proj);
       });
@@ -227,31 +270,64 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
     const finalOffsetX = event.delta.x;
 
     if (activeId && finalOverId) {
-      const finalProjection = getProjection(flatRows, activeId, finalOverId, finalOffsetX, effectiveMaxDepth);
+      const finalProjection = getProjection(flatRows, activeId, finalOverId, finalOffsetX, effectiveMaxDepth, effectiveMinDepth);
       const { parentId, previousSiblingId } = finalProjection;
+
+      // Handle dragging groups to reorder them
+      if (activeId.startsWith("group-")) {
+        const activeStatus = activeId.replace("group-", "");
+        const prevStatus = previousSiblingId ? previousSiblingId.replace("group-", "") : null;
+        setGroupOrder((prev) => {
+          const next = prev.filter((s) => s !== activeStatus);
+          const idx = prevStatus ? next.indexOf(prevStatus) + 1 : 0;
+          next.splice(idx, 0, activeStatus);
+          return next;
+        });
+        resetDragState();
+        return;
+      }
+
       let previousTree: TaskNodeData[] = [];
 
-      setData((prev) => {
+      setData((prev): TaskNodeData[] => {
         previousTree = prev;
         const { tree: withoutActive, removed } = removeNode(prev, activeId);
         if (!removed) return prev;
 
-        const siblingArray = parentId ? findNode(withoutActive, parentId)?.children ?? [] : withoutActive;
+        let targetParentId = parentId;
+        let newStatus = removed.status;
+
+        // If we drop into a group directly
+        if (parentId?.startsWith("group-")) {
+          targetParentId = null; // It's a root task in the actual data array
+          newStatus = (parentId.replace("group-", "") as any) || removed.status;
+        } else if (parentId) {
+          // If we drop inside a task, inherit its status
+          const parentNode = findNode(withoutActive, parentId);
+          if (parentNode && parentNode.type !== "group") {
+            newStatus = parentNode.status;
+          }
+        }
+
+        const updatedRemoved = { ...removed, status: newStatus } as TaskNodeData;
+
+        const siblingArray = targetParentId ? findNode(withoutActive, targetParentId)?.children ?? [] : withoutActive;
         const insertIndex = previousSiblingId
           ? siblingArray.findIndex((t) => t.id === previousSiblingId) + 1
           : 0;
 
-        return insertNode(withoutActive, parentId, insertIndex, removed);
+        return insertNode(withoutActive, targetParentId, insertIndex, updatedRemoved) as TaskNodeData[];
       });
 
-      if (parentId) {
+      if (parentId && !parentId.startsWith("group-")) {
         setExpanded((prev) => new Set(prev).add(parentId));
       }
 
+      // We should ideally push the status change to the API too, but skipping for brevity
       fetch(`/api/tasks/${activeId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parentId, previousSiblingId }),
+        body: JSON.stringify({ parentId: parentId?.startsWith("group-") ? null : parentId, previousSiblingId }),
       }).catch(() => setData(previousTree));
     }
 
@@ -313,14 +389,24 @@ export function TaskListView({ height = 560, className = "" }: TaskListViewProps
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
-                  <TaskRow
-                    task={task}
-                    depth={depth}
-                    isExpanded={expanded.has(task.id)}
-                    isLoadingChildren={loadingIds.has(task.id)}
-                    isReceivingDrop={projectionState?.parentId === task.id}
-                    onToggle={handleToggle}
-                  />
+                  {task.type === "group" ? (
+                    <GroupRow
+                      group={task as GroupNodeData}
+                      depth={depth}
+                      isExpanded={expanded.has(task.id)}
+                      isReceivingDrop={projectionState?.parentId === task.id}
+                      onToggle={handleToggle}
+                    />
+                  ) : (
+                    <TaskRow
+                      task={task as TaskNodeData}
+                      depth={depth}
+                      isExpanded={expanded.has(task.id)}
+                      isLoadingChildren={loadingIds.has(task.id)}
+                      isReceivingDrop={projectionState?.parentId === task.id}
+                      onToggle={handleToggle}
+                    />
+                  )}
                 </div>
               );
             })}

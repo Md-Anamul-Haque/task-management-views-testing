@@ -38,6 +38,7 @@ export function getProjection(
   overId: string,
   dragOffsetX: number,
   effectiveMaxDepth: number,
+  effectiveMinDepth: number = 0,
 ): Projection {
   const activeRow = flatRows.find((r) => r.task.id === activeId);
   if (!activeRow) {
@@ -89,13 +90,19 @@ export function getProjection(
     }
   }
 
+  // If we are inserting at the very top (previousRow is null), but the item
+  // MUST be inside a group (effectiveMinDepth > 0), force it into the first group.
+  if (!previousRow && effectiveMinDepth > 0 && withoutActive.length > 0) {
+    previousRow = withoutActive[0];
+  }
+
   let depth = activeRow.depth + dragDepthDelta;
 
   const maxPossibleDepth = previousRow ? previousRow.depth + 1 : 0;
   const minPossibleDepth = nextRow ? nextRow.depth : 0;
 
   depth = Math.min(depth, maxPossibleDepth, effectiveMaxDepth);
-  depth = Math.max(depth, minPossibleDepth, 0);
+  depth = Math.max(depth, minPossibleDepth, effectiveMinDepth);
 
   if (!previousRow || depth === 0) {
     // Inserting at root level. Walk backwards from the insertion point to
