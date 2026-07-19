@@ -1,25 +1,30 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState } from "react";
-// import invariant from "tiny-invariant";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
-import { extractClosestEdge } from "@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge";
-import { getReorderDestinationIndex } from "@atlaskit/pragmatic-drag-and-drop-hitbox/util/get-reorder-destination-index";
-import { reorder } from "@atlaskit/pragmatic-drag-and-drop/reorder";
+import { useEffect, useReducer, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  defaultDropAnimationSideEffects,
+  type DragStartEvent,
+  type DragOverEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
+import { createPortal } from "react-dom";
 
 import { boardReducer } from "../lib/board-reducer";
-import { isColumnDropData, isTaskDropData, isTaskDragData } from "../lib/dnd-types";
 import { initialColumnOrder, initialColumns, initialTasksByColumn } from "../lib/mock-data";
 import { BoardColumn } from "../components/board-column";
 import { ColumnSkeleton } from "../components/column-skeleton";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { ColumnId } from "../types";
+import { TaskCard } from "./task-card";
+import type { ColumnId, Task } from "../types";
 
-/**
- * Set to `true` (or wire up real fetching) once this board is connected to an API —
- * the skeleton and this flag are here so the loading path isn't an afterthought.
- */
 const SIMULATED_INITIAL_LOAD_MS = 500;
 
 export function TaskBoard() {
@@ -30,151 +35,194 @@ export function TaskBoard() {
   });
 
   const [isLoading, setIsLoading] = useState(true);
-  const [announcement, setAnnouncement] = useState("");
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-
-  // The drop monitor below is subscribed once; it reads state through this ref so the
-  // subscription never goes stale without needing to be torn down and rebuilt on every move.
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setIsLoading(false), SIMULATED_INITIAL_LOAD_MS);
     return () => clearTimeout(timer);
   }, []);
 
-  // Horizontal auto-scroll for the board while dragging a card near either edge.
-  useEffect(() => {
-    const element = scrollerRef.current;
-    if (!element) return;
-    return autoScrollForElements({ element });
-  }, []);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
-  useEffect(() => {
-    function announceMove(taskId: string, destinationColumnId: ColumnId) {
-      const current = stateRef.current;
-      const task = Object.values(current.tasksByColumn)
-        .flat()
-        .find((t) => t.id === taskId);
-      if (!task) return;
-      setAnnouncement(`Moved "${task.title}" to ${current.columns[destinationColumnId].title}`);
+
+  function handleDragStart(event: DragStartEvent) {
+    const { active } = event;
+    const task = active.data.current?.task as Task | undefined;
+    if (task) {
+      setActiveTask(task);
+    }
+  }
+
+  function handleDragOver(event: DragOverEvent) {
+    const { active, over } = event;
+    if (!over) return;
+
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    if (activeId === overId) return;
+
+    const isActiveTask = active.data.current?.type === "Task";
+    const isOverTask = over.data.current?.type === "Task";
+    const isOverColumn = over.data.current?.type === "Column";
+
+    if (!isActiveTask) return;
+
+    const activeTask = active.data.current?.task as Task;
+    const activeColumnId = activeTask.columnId;
+    let overColumnId: ColumnId | null = null;
+
+    if (isOverTask) {
+      const overTask = over.data.current?.task as Task;
+      overColumnId = overTask.columnId;
+    } else if (isOverColumn) {
+      overColumnId = overId as ColumnId;
     }
 
-    return monitorForElements({
-      canMonitor({ source }) {
-        return isTaskDragData(source.data);
-      },
-      onDrop({ source, location }) {
-        const dropTargets = location.current.dropTargets;
-        if (!dropTargets.length) return;
+    if (!activeColumnId || !overColumnId || activeColumnId === overColumnId) {
+      return;
+    }
 
-        const sourceData = source.data;
-        if (!isTaskDragData(sourceData)) return;
+    // Moving between columns
+    const overItems = state.tasksByColumn[overColumnId];
+    let newIndex = overItems.length;
 
-        const { taskId, columnId: sourceColumnId } = sourceData;
-        const innermost = dropTargets[0];
-        const innermostData = innermost.data;
-        const current = stateRef.current;
+    if (isOverTask) {
+      const overIndex = overItems.findIndex((t) => t.id === overId);
+      const isBelowOverItem =
+        over &&
+        active.rect.current.translated &&
+        active.rect.current.translated.top > over.rect.top + over.rect.height;
 
-        // Dropped on the column's empty area (below the last card, or an empty column).
-        if (isColumnDropData(innermostData)) {
-          const destinationColumnId = innermostData.columnId;
-          if (destinationColumnId === sourceColumnId) return;
+      const modifier = isBelowOverItem ? 1 : 0;
+      newIndex = overIndex >= 0 ? overIndex + modifier : overItems.length + 1;
+    }
 
-          const destinationIndex = current.tasksByColumn[destinationColumnId].length;
-          dispatch({
-            type: "move-task",
-            taskId,
-            sourceColumnId,
-            destinationColumnId,
-            destinationIndex,
-          });
-          announceMove(taskId, destinationColumnId);
-          return;
-        }
-
-        // Dropped on (or beside) another card.
-        if (isTaskDropData(innermostData)) {
-          const destinationTaskId = innermostData.taskId;
-          if (destinationTaskId === taskId) return;
-
-          const destinationColumnId = innermostData.columnId;
-          const edge = extractClosestEdge(innermostData);
-          const destinationList = current.tasksByColumn[destinationColumnId];
-          const indexOfTarget = destinationList.findIndex((t) => t.id === destinationTaskId);
-          if (indexOfTarget === -1) return;
-
-          if (sourceColumnId === destinationColumnId) {
-            const startIndex = destinationList.findIndex((t) => t.id === taskId);
-            if (startIndex === -1) return;
-
-            const destinationIndex = getReorderDestinationIndex({
-              startIndex,
-              indexOfTarget,
-              closestEdgeOfTarget: edge,
-              axis: "vertical",
-            });
-
-            const reordered = reorder({
-              list: destinationList,
-              startIndex,
-              finishIndex: destinationIndex,
-            });
-
-            dispatch({ type: "reorder-column", columnId: destinationColumnId, list: reordered });
-            return;
-          }
-
-          const destinationIndex = edge === "bottom" ? indexOfTarget + 1 : indexOfTarget;
-          dispatch({
-            type: "move-task",
-            taskId,
-            sourceColumnId,
-            destinationColumnId,
-            destinationIndex,
-          });
-          announceMove(taskId, destinationColumnId);
-        }
-      },
+    dispatch({
+      type: "move-task",
+      taskId: activeId,
+      sourceColumnId: activeColumnId,
+      destinationColumnId: overColumnId,
+      destinationIndex: newIndex,
     });
-  }, []);
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveTask(null);
+
+    const { active, over } = event;
+    if (!over) return;
+
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    if (activeId === overId) return;
+
+    const activeTaskData = active.data.current?.task as Task | undefined;
+    const activeColumnId = activeTaskData?.columnId;
+    if (!activeColumnId) return;
+
+    let overColumnId: ColumnId | null = null;
+    if (over.data.current?.type === "Column") {
+      overColumnId = overId as ColumnId;
+    } else if (over.data.current?.type === "Task") {
+      const overTaskData = over.data.current?.task as Task;
+      overColumnId = overTaskData.columnId;
+    }
+
+    if (!overColumnId) return;
+
+    if (activeColumnId === overColumnId) {
+      // Reorder within the same column
+      const items = state.tasksByColumn[activeColumnId];
+      const activeIndex = items.findIndex((t) => t.id === activeId);
+      const overIndex = items.findIndex((t) => t.id === overId);
+
+      if (activeIndex !== overIndex) {
+        // dnd-kit arrayMove equivalent
+        const newItems = [...items];
+        const [movedItem] = newItems.splice(activeIndex, 1);
+        newItems.splice(overIndex, 0, movedItem);
+
+        dispatch({
+          type: "reorder-column",
+          columnId: activeColumnId,
+          list: newItems,
+        });
+      }
+    }
+  }
 
   return (
     <TooltipProvider delay={200}>
-      <div className="flex h-full flex-col">
-        <div aria-live="polite" className="sr-only">
-          {announcement}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex h-full flex-col">
+          <div className="flex h-full min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4">
+            {isLoading
+              ? state.columnOrder.map((columnId) => <ColumnSkeleton key={columnId} />)
+              : state.columnOrder.map((columnId) => (
+                <BoardColumn
+                  key={columnId}
+                  column={state.columns[columnId]}
+                  tasks={state.tasksByColumn[columnId]}
+                  columnOrder={state.columnOrder}
+                  columns={state.columns}
+                  onMoveTask={(taskId, destinationColumnId) => {
+                    dispatch({
+                      type: "move-task",
+                      taskId,
+                      sourceColumnId: columnId,
+                      destinationColumnId,
+                      destinationIndex: state.tasksByColumn[destinationColumnId].length,
+                    });
+                  }}
+                  onDeleteTask={(taskId) =>
+                    dispatch({ type: "remove-task", taskId, columnId })
+                  }
+                  onAddTask={(title) => dispatch({ type: "add-task", columnId, title })}
+                />
+              ))}
+          </div>
         </div>
 
-        <div
-          ref={scrollerRef}
-          className="flex h-full min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4"
-        >
-          {isLoading
-            ? state.columnOrder.map((columnId) => <ColumnSkeleton key={columnId} />)
-            : state.columnOrder.map((columnId) => (
-              <BoardColumn
-                key={columnId}
-                column={state.columns[columnId]}
-                tasks={state.tasksByColumn[columnId]}
-                columnOrder={state.columnOrder}
-                columns={state.columns}
-                onMoveTask={(taskId, destinationColumnId) => {
-                  // This column only ever renders its own tasks, so it's always the source.
-                  dispatch({
-                    type: "move-task",
-                    taskId,
-                    sourceColumnId: columnId,
-                    destinationColumnId,
-                    destinationIndex: state.tasksByColumn[destinationColumnId].length,
-                  });
-                }}
-                onDeleteTask={(taskId) => dispatch({ type: "remove-task", taskId, columnId })}
-                onAddTask={(title) => dispatch({ type: "add-task", columnId, title })}
-              />
-            ))}
-        </div>
-      </div>
+        {typeof window !== "undefined" &&
+          createPortal(
+            <DragOverlay
+              dropAnimation={{
+                sideEffects: defaultDropAnimationSideEffects({ styles: { active: { opacity: "0.4" } } }),
+              }}
+            >
+              {activeTask ? (
+                <div className="opacity-80 scale-105 rotate-2 transition-transform shadow-2xl">
+                  <TaskCard
+                    task={activeTask}
+                    columnOrder={state.columnOrder}
+                    columns={state.columns}
+                    onMove={() => { }}
+                    onDelete={() => { }}
+                    isOverlay
+                  />
+                </div>
+              ) : null}
+            </DragOverlay>,
+            document.body
+          )}
+      </DndContext>
     </TooltipProvider>
   );
 }

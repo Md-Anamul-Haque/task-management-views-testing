@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
+import { memo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { isTaskDragData } from "../lib/dnd-types";
 import { TaskCard } from "../components/task-card";
 import type { ColumnId, ColumnMeta, Task } from "../types";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { useDroppable } from "@dnd-kit/core";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 const ACCENT_DOT: Record<ColumnMeta["accent"], string> = {
   slate: "bg-slate-400",
@@ -28,7 +28,7 @@ interface BoardColumnProps {
   onAddTask: (title: string) => void;
 }
 
-export function BoardColumn({
+export const BoardColumn = memo(function BoardColumn({
   column,
   tasks,
   columnOrder,
@@ -37,31 +37,29 @@ export function BoardColumn({
   onDeleteTask,
   onAddTask,
 }: BoardColumnProps) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [isDraggedOver, setIsDraggedOver] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
 
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-    return dropTargetForElements({
-      element,
-      getData: () => ({ type: "column", columnId: column.id }),
-      canDrop: ({ source }) => isTaskDragData(source.data),
-      getIsSticky: () => true,
-      onDragEnter: () => setIsDraggedOver(true),
-      onDragLeave: () => setIsDraggedOver(false),
-      onDrop: () => setIsDraggedOver(false),
-    });
-  }, [column.id]);
+  const { setNodeRef, isOver } = useDroppable({
+    id: column.id,
+    data: {
+      type: "Column",
+    },
+  });
 
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    return autoScrollForElements({ element });
-  }, []);
+  const rowVirtualizer = useVirtualizer({
+    count: tasks.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 130,
+    overscan: 5,
+  });
+
+  function setRefs(node: HTMLDivElement | null) {
+    scrollRef.current = node;
+    setNodeRef(node);
+  }
 
   function submitDraft() {
     const trimmed = draftTitle.trim();
@@ -69,6 +67,8 @@ export function BoardColumn({
     setDraftTitle("");
     setIsAdding(false);
   }
+
+  const taskIds = tasks.map((t) => t.id);
 
   return (
     <section
@@ -98,11 +98,11 @@ export function BoardColumn({
       </header>
 
       <div
-        ref={scrollRef}
+        ref={setRefs}
         className={cn(
-          "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl px-2 pb-2 transition-colors",
+          "flex min-h-0 flex-1 flex-col overflow-y-auto rounded-xl px-2 pb-2 transition-colors",
           "scrollbar-thin",
-          isDraggedOver && "bg-accent/40",
+          isOver && "bg-accent/40"
         )}
       >
         {tasks.length === 0 && !isAdding && (
@@ -111,22 +111,46 @@ export function BoardColumn({
           </div>
         )}
 
-        {tasks.map((task, index) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            index={index}
-            columnAccent={column.accent}
-            columnOrder={columnOrder}
-            columns={columns}
-            onMove={(destinationColumnId) => onMoveTask(task.id, destinationColumnId)}
-            onDelete={() => onDeleteTask(task.id)}
-          />
-        ))}
+        <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const task = tasks[virtualRow.index];
+              return (
+                <div
+                  key={virtualRow.key}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    paddingBottom: "8px",
+                  }}
+                >
+                  <TaskCard
+                    task={task}
+                    columnOrder={columnOrder}
+                    columns={columns}
+                    onMove={(destinationColumnId) => onMoveTask(task.id, destinationColumnId)}
+                    onDelete={() => onDeleteTask(task.id)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </SortableContext>
 
         {isAdding && (
           <form
-            className="flex flex-col gap-1.5 rounded-xl border bg-card p-2"
+            className="flex flex-col gap-1.5 rounded-xl border bg-card p-2 mt-1"
             onSubmit={(event) => {
               event.preventDefault();
               submitDraft();
@@ -171,4 +195,4 @@ export function BoardColumn({
       </div>
     </section>
   );
-}
+});
